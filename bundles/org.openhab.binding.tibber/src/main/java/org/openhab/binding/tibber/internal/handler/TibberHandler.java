@@ -102,6 +102,7 @@ public class TibberHandler extends BaseThingHandler {
     }
 
     public void getTibberParameters() {
+        String response = "";
         try {
             httpHeader.put("cache-control", "no-cache");
             httpHeader.put("content-type", JSON_CONTENT_TYPE);
@@ -109,10 +110,9 @@ public class TibberHandler extends BaseThingHandler {
 
             TibberPriceConsumptionHandler tibberQuery = new TibberPriceConsumptionHandler();
             InputStream connectionStream = tibberQuery.connectionInputStream(tibberConfig.getHomeid());
-            String response = HttpUtil.executeUrl("POST", BASE_URL, httpHeader, connectionStream, null,
-                    REQUEST_TIMEOUT);
+            response = HttpUtil.executeUrl("POST", BASE_URL, httpHeader, connectionStream, null, REQUEST_TIMEOUT);
 
-            if (!response.contains("error") && !response.contains("<html>")) {
+            if (!response.contains("error") && !response.contains("<html>") && !response.contentEquals("")) {
                 updateStatus(ThingStatus.ONLINE);
 
                 getURLInput(BASE_URL);
@@ -141,13 +141,14 @@ public class TibberHandler extends BaseThingHandler {
     }
 
     public void getURLInput(String url) throws IOException {
+        String jsonResponse = "";
         TibberPriceConsumptionHandler tibberQuery = new TibberPriceConsumptionHandler();
 
         InputStream inputStream = tibberQuery.getInputStream(tibberConfig.getHomeid());
-        String jsonResponse = HttpUtil.executeUrl("POST", url, httpHeader, inputStream, null, REQUEST_TIMEOUT);
+        jsonResponse = HttpUtil.executeUrl("POST", url, httpHeader, inputStream, null, REQUEST_TIMEOUT);
         logger.debug("API response: {}", jsonResponse);
 
-        if (!jsonResponse.contains("error") && !jsonResponse.contains("<html>")) {
+        if (!jsonResponse.contains("error") && !jsonResponse.contains("<html>") && !jsonResponse.equals("")) {
             if (getThing().getStatus() == ThingStatus.OFFLINE || getThing().getStatus() == ThingStatus.INITIALIZING) {
                 updateStatus(ThingStatus.ONLINE);
             }
@@ -163,13 +164,14 @@ public class TibberHandler extends BaseThingHandler {
                     updateState(CURRENT_TOTAL, new DecimalType(myObject.get("total").toString()));
                     String timestamp = myObject.get("startsAt").toString().substring(1, 20);
                     updateState(CURRENT_STARTSAT, new DateTimeType(timestamp));
+                    updateState(CURRENT_LEVEL, new StringType(myObject.get("level").toString()));
 
                 } catch (JsonSyntaxException e) {
                     updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
                             "Error communicating with Tibber API: " + e.getMessage());
                 }
             }
-            if (jsonResponse.contains("daily")) {
+            if (jsonResponse.contains("daily") && !jsonResponse.contains("[]")) {
                 try {
                     JsonObject myObject = (JsonObject) object.getAsJsonObject("data").getAsJsonObject("viewer")
                             .getAsJsonObject("home").getAsJsonObject("daily").getAsJsonArray("nodes").get(0);
@@ -188,7 +190,7 @@ public class TibberHandler extends BaseThingHandler {
                             "Error communicating with Tibber API: " + e.getMessage());
                 }
             }
-            if (jsonResponse.contains("hourly")) {
+            if (jsonResponse.contains("hourly") && !jsonResponse.contains("[]")) {
                 try {
                     JsonObject myObject = (JsonObject) object.getAsJsonObject("data").getAsJsonObject("viewer")
                             .getAsJsonObject("home").getAsJsonObject("hourly").getAsJsonArray("nodes").get(0);
@@ -210,21 +212,13 @@ public class TibberHandler extends BaseThingHandler {
         } else if (jsonResponse.contains("error")) {
             updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
                     "Error in response from Tibber API: " + jsonResponse);
-            try {
-                Thread.sleep(300 * 1000);
-                return;
-            } catch (InterruptedException e) {
-                logger.debug("Tibber OFFLINE, attempting thread sleep: {}", e.getMessage());
-            }
+            dispose();
+            initialize();
         } else {
             updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
                     "Unexpected response from Tibber: " + jsonResponse);
-            try {
-                Thread.sleep(300 * 1000);
-                return;
-            } catch (InterruptedException e) {
-                logger.debug("Tibber OFFLINE, attempting thread sleep: {}", e.getMessage());
-            }
+            dispose();
+            initialize();
         }
     }
 
@@ -257,7 +251,7 @@ public class TibberHandler extends BaseThingHandler {
                 updateState(channelID, new QuantityType<>(new BigDecimal(channelValue), SmartHomeUnits.WATT));
             } else if (channelID.contains("voltage")) {
                 updateState(channelID, new QuantityType<>(new BigDecimal(channelValue), SmartHomeUnits.VOLT));
-            } else if (channelID.contains("live_current")) {
+            } else if (channelID.contains("current")) {
                 updateState(channelID, new QuantityType<>(new BigDecimal(channelValue), SmartHomeUnits.AMPERE));
             } else {
                 updateState(channelID, new DecimalType(channelValue));
@@ -285,7 +279,7 @@ public class TibberHandler extends BaseThingHandler {
             WebSocketClient client = this.client;
             if (client != null) {
                 try {
-                    logger.debug("Stopping and Terminating Websocket connection");
+                    logger.debug("Close - Stopping and Terminating Websocket connection");
                     client.stop();
                     client.destroy();
                 } catch (Exception e) {
@@ -307,6 +301,7 @@ public class TibberHandler extends BaseThingHandler {
             WebSocketClient client = this.client;
             if (client == null) {
                 client = new WebSocketClient(sslContextFactory, websocketExecutor);
+                client.setMaxIdleTimeout(600 * 1000);
                 this.client = client;
             }
 
@@ -352,7 +347,7 @@ public class TibberHandler extends BaseThingHandler {
             } catch (IOException e) {
                 logger.warn("Websocket Close Exception: {}", e.getMessage());
             }
-            session.close(0, "Tibber websocket disposed");
+            session.close();
             this.session = null;
             this.socket = null;
         }
@@ -402,12 +397,17 @@ public class TibberHandler extends BaseThingHandler {
             WebSocketClient client = TibberHandler.this.client;
             if (client != null && client.isRunning()) {
                 try {
-                    logger.debug("Stopping and Terminating Websocket connection");
+                    logger.debug("OnWebSocketClose - Stopping and Terminating Websocket connection");
                     client.stop();
                     client.destroy();
                 } catch (Exception e) {
                     logger.warn("Websocket Client Stop Exception: {}", e.getMessage());
                 }
+            }
+            Session session = TibberHandler.this.session;
+            if (session != null) {
+                logger.debug("Terminating Live Session");
+                session.close();
             }
             TibberHandler.this.session = null;
             TibberHandler.this.client = null;
@@ -416,7 +416,7 @@ public class TibberHandler extends BaseThingHandler {
 
         @OnWebSocketError
         public void onWebSocketError(Throwable e) {
-            logger.debug("Error during websocket communication: {}", e.getMessage());
+            logger.error("Error during websocket communication: {}", e.getMessage());
             onClose(0, e.getMessage());
         }
 
@@ -426,7 +426,7 @@ public class TibberHandler extends BaseThingHandler {
                 logger.debug("Connected to Server");
                 startSubscription();
             } else if (message.contains("error") || message.contains("terminate")) {
-                logger.debug("Error/terminate received from server: {}", message);
+                logger.error("Error/terminate received from server: {}", message);
                 close();
             } else if (message.contains("liveMeasurement")) {
                 JsonObject object = (JsonObject) new JsonParser().parse(message);
@@ -469,14 +469,14 @@ public class TibberHandler extends BaseThingHandler {
                 if (myObject.has("voltagePhase3")) {
                     updateChannel(LIVE_VOLTAGE3, myObject.get("voltagePhase3").toString());
                 }
-                if (myObject.has("currentPhase1")) {
-                    updateChannel(LIVE_CURRENT1, myObject.get("currentPhase1").toString());
+                if (myObject.has("currentL1")) {
+                    updateChannel(LIVE_CURRENT1, myObject.get("currentL1").toString());
                 }
-                if (myObject.has("currentPhase2")) {
-                    updateChannel(LIVE_CURRENT2, myObject.get("currentPhase2").toString());
+                if (myObject.has("currentL2")) {
+                    updateChannel(LIVE_CURRENT2, myObject.get("currentL2").toString());
                 }
-                if (myObject.has("currentPhase3")) {
-                    updateChannel(LIVE_CURRENT3, myObject.get("currentPhase3").toString());
+                if (myObject.has("currentL3")) {
+                    updateChannel(LIVE_CURRENT3, myObject.get("currentL3").toString());
                 }
                 if (myObject.has("powerProduction")) {
                     updateChannel(LIVE_POWERPRODUCTION, myObject.get("powerProduction").toString());
@@ -507,7 +507,7 @@ public class TibberHandler extends BaseThingHandler {
             String query = "{\"id\":\"1\",\"type\":\"start\",\"payload\":{\"variables\":{},\"extensions\":{},\"operationName\":null,\"query\":\"subscription {\\n liveMeasurement(homeId:\\\""
                     + tibberConfig.getHomeid()
                     + "\\\") {\\n timestamp\\n power\\n lastMeterConsumption\\n accumulatedConsumption\\n accumulatedCost\\n currency\\n minPower\\n averagePower\\n maxPower\\n"
-                    + "voltagePhase1\\n voltagePhase2\\n voltagePhase3\\n currentPhase1\\n currentPhase2\\n currentPhase3\\n powerProduction\\n accumulatedProduction\\n minPowerProduction\\n maxPowerProduction\\n }\\n }\\n\"}}";
+                    + "voltagePhase1\\n voltagePhase2\\n voltagePhase3\\n currentL1\\n currentL2\\n currentL3\\n powerProduction\\n accumulatedProduction\\n minPowerProduction\\n maxPowerProduction\\n }\\n }\\n\"}}";
             try {
                 TibberWebSocketListener socket = TibberHandler.this.socket;
                 if (socket != null) {
