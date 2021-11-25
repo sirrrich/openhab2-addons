@@ -302,10 +302,11 @@ public class TibberHandler extends BaseThingHandler {
 
     public void open() {
         WebSocketClient client = this.client;
-        if (client == null || !client.isRunning()) {
+        if (client == null || !client.isRunning() || !isConnected()) {
             if (client != null) {
                 try {
                     client.stop();
+                    client.destroy();
                 } catch (Exception e) {
                     logger.warn("Failed to stop websocket client: {}", e.getMessage());
                 }
