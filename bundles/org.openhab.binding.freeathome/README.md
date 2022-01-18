@@ -5,6 +5,7 @@ NOTE: Only suitable for SysAp version 2.2.4 and higher
 
 **Disclaimer:** This binding is a private contribution and is not an official Busch-Jaeger product.
 
+**Needs rocks.xmpp: https://bitbucket.org/sco0ter/babbler/src/master/ **
 
 ### Supported things
 Type | Description
